@@ -77,7 +77,7 @@ describe("Immich API client", () => {
     it("searches assets with albumIds in POST body", async () => {
       mockFetch.mockResolvedValue({
         ok: true,
-        json: async () => ({ assets: [{ id: "a1", originalFileName: "x.jpg", type: "IMAGE" }] }),
+        json: async () => ({ assets: { items: [{ id: "a1", originalFileName: "x.jpg", type: "IMAGE" }], hasNextPage: false } }),
       });
 
       const { searchAssetsByAlbumIds } = await import("../src/immich");
@@ -89,9 +89,92 @@ describe("Immich API client", () => {
           "x-api-key": apiKey,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ albumIds: ["album-1", "album-2"] }),
+        body: JSON.stringify({ albumIds: ["album-1", "album-2"], size: 1000, page: 1 }),
       });
       expect(result).toHaveLength(1);
+    });
+
+    it("uses assetCount as page size when provided", async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => ({ assets: { items: [], hasNextPage: false } }),
+      });
+
+      const { searchAssetsByAlbumIds } = await import("../src/immich");
+      await searchAssetsByAlbumIds(baseUrl, apiKey, ["album-1"], 500);
+
+      expect(mockFetch).toHaveBeenCalledWith(`${baseUrl}/api/search/metadata`, {
+        method: "POST",
+        headers: {
+          "x-api-key": apiKey,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ albumIds: ["album-1"], size: 500, page: 1 }),
+      });
+    });
+
+    it("caps page size at 1000 when assetCount exceeds it", async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => ({ assets: { items: [], hasNextPage: false } }),
+      });
+
+      const { searchAssetsByAlbumIds } = await import("../src/immich");
+      await searchAssetsByAlbumIds(baseUrl, apiKey, ["album-1"], 5000);
+
+      expect(mockFetch).toHaveBeenCalledWith(`${baseUrl}/api/search/metadata`, {
+        method: "POST",
+        headers: {
+          "x-api-key": apiKey,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ albumIds: ["album-1"], size: 1000, page: 1 }),
+      });
+    });
+
+    it("fetches all pages when multiple pages exist", async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            assets: {
+              items: [{ id: "a1", originalFileName: "x.jpg", type: "IMAGE" }],
+              nextPage: 2,
+              hasNextPage: true,
+            },
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            assets: {
+              items: [{ id: "a2", originalFileName: "y.jpg", type: "IMAGE" }],
+              hasNextPage: false,
+            },
+          }),
+        });
+
+      const { searchAssetsByAlbumIds } = await import("../src/immich");
+      const result = await searchAssetsByAlbumIds(baseUrl, apiKey, ["album-1"]);
+
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(mockFetch).toHaveBeenNthCalledWith(1, `${baseUrl}/api/search/metadata`, {
+        method: "POST",
+        headers: {
+          "x-api-key": apiKey,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ albumIds: ["album-1"], size: 1000, page: 1 }),
+      });
+      expect(mockFetch).toHaveBeenNthCalledWith(2, `${baseUrl}/api/search/metadata`, {
+        method: "POST",
+        headers: {
+          "x-api-key": apiKey,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ albumIds: ["album-1"], size: 1000, page: 2 }),
+      });
+      expect(result).toHaveLength(2);
     });
 
     it("returns empty array when assets is missing", async () => {

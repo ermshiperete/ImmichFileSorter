@@ -110,7 +110,7 @@ async function run(args: string[]): Promise<number> {
 
   let images: Asset[];
   try {
-    const assets = await getAssetsFromAlbumId(url, apiKey, [album.id]);
+    const assets = await getAssetsFromAlbumId(url, apiKey, [album.id], album.assetCount);
     images = filterImages(assets);
   } catch (error) {
     console.error(`Failed to fetch assets: ${(error as Error).message}`);
@@ -126,43 +126,59 @@ async function run(args: string[]): Promise<number> {
     naturalSort(a.originalFileName, b.originalFileName)
   );
 
-  const baseAsset = sorted[0];
-  if (!baseAsset.dateTimeOriginal) {
-    console.error(
-      `Base asset '${baseAsset.originalFileName}' has no dateTimeOriginal`
-    );
-    return 1;
+  const allRows: { filename: string; oldTime: string; newTime: string }[] = [];
+  const allAssets: Asset[] = [];
+  let cumulativeOffset = 0;
+
+  for (let i = 0; i < sorted.length; ) {
+    const currentTime = sorted[i].fileCreatedAt;
+    if (!currentTime) {
+      i++;
+      continue;
+    }
+
+    let j = i + 1;
+    while (j < sorted.length && sorted[j].fileCreatedAt === currentTime) {
+      j++;
+    }
+
+    const group = sorted.slice(i, j);
+    if (group.length >= 2) {
+      const baseTime = addSecondsToISO(currentTime, cumulativeOffset);
+      cumulativeOffset += group.length * increment;
+
+      for (let k = 0; k < group.length; k++) {
+        allRows.push({
+          filename: group[k].originalFileName,
+          oldTime: group[k].fileCreatedAt ?? "",
+          newTime: addSecondsToISO(baseTime, k * increment),
+        });
+        allAssets.push(group[k]);
+      }
+    }
+
+    i = j;
   }
 
-  const baseDateTime = baseAsset.dateTimeOriginal;
-
-  const rows = sorted.map((asset, index) => {
-    const newTime = addSecondsToISO(
-      baseDateTime,
-      index * increment
-    );
-    return {
-      filename: asset.originalFileName,
-      oldTime: asset.dateTimeOriginal ?? "",
-      newTime,
-    };
-  });
+  if (allRows.length === 0) {
+    console.log("No groups of 2+ images with the same timestamp found");
+    return 0;
+  }
 
   if (!force) {
-    console.log(formatTable(rows));
+    console.log(formatTable(allRows));
     return 0;
   }
 
   let failureCount = 0;
-  for (const row of rows) {
-    const asset = sorted.find((a) => a.originalFileName === row.filename);
-    if (!asset) continue;
+  for (let i = 0; i < allRows.length; i++) {
+    const asset = allAssets[i];
 
     try {
-      await updateAssetTimestamp(url, apiKey, asset.id!, row.newTime);
-      console.log(`Updated: ${row.filename} -> ${row.newTime}`);
+      await updateAssetTimestamp(url, apiKey, asset.id!, allRows[i].newTime);
+      console.log(`Updated: ${allRows[i].filename} -> ${allRows[i].newTime}`);
     } catch (error) {
-      console.error(`Failed to update ${row.filename}: ${(error as Error).message}`);
+      console.error(`Failed to update ${allRows[i].filename}: ${(error as Error).message}`);
       failureCount++;
     }
   }

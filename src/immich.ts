@@ -1,14 +1,14 @@
 export interface Album {
   id: string;
   albumName: string;
-  assets: Asset[];
+  assetCount: number;
 }
 
 export interface Asset {
   id: string;
   originalFileName: string;
   type: "IMAGE" | "VIDEO";
-  dateTimeOriginal?: string;
+  fileCreatedAt?: string;
 }
 
 export async function fetchAlbums(baseUrl: string, apiKey: string): Promise<Album[]> {
@@ -30,23 +30,36 @@ export async function fetchAlbums(baseUrl: string, apiKey: string): Promise<Albu
 export async function searchAssetsByAlbumIds(
   baseUrl: string,
   apiKey: string,
-  albumIds: string[]
+  albumIds: string[],
+  assetCount?: number,
 ): Promise<Asset[]> {
-  const response = await fetch(`${baseUrl}/api/search/metadata`, {
-    method: "POST",
-    headers: {
-      "x-api-key": apiKey,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ albumIds }),
-  });
+  const pageSize = assetCount && assetCount > 0 ? Math.min(assetCount, 1000) : 1000;
+  let page = 1;
+  let hasNextPage = true;
+  const allAssets: Asset[] = [];
 
-  if (!response.ok) {
-    throw new Error(`Failed to search assets: ${response.status} ${response.statusText}`);
+  while (hasNextPage) {
+    const response = await fetch(`${baseUrl}/api/search/metadata`, {
+      method: "POST",
+      headers: {
+        "x-api-key": apiKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ albumIds, size: pageSize, page }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to search assets: ${response.status} ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    const items = data.assets?.items ?? [];
+    allAssets.push(...items);
+    hasNextPage = data.assets?.hasNextPage ?? false;
+    page = data.assets?.nextPage ?? page + 1;
   }
 
-  const data = await response.json();
-  return data.assets?.items ?? [];
+  return allAssets;
 }
 
 export function findAlbumByName(albums: Album[], name: string): Album | undefined {
